@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-set -uo pipefail
+# Build a self-contained sk_pgp wheel (brew OpenSSL 3.6.2 PQC bundled under a
+# private SONAME via auditwheel — enabled by the rpath in .cargo/config.toml)
+# and install it into ~/.skenv. Works in mixed-OpenSSL processes.
+set -euo pipefail
 source "$HOME/.cargo/env"
-OSSL=/home/linuxbrew/.linuxbrew/opt/openssl@3
-export OPENSSL_DIR="$OSSL" OPENSSL_LIB_DIR="$OSSL/lib" OPENSSL_INCLUDE_DIR="$OSSL/include"
-export PKG_CONFIG_PATH="$OSSL/lib/pkgconfig" BINDGEN_EXTRA_CLANG_ARGS="-I$OSSL/include"
-export C_INCLUDE_PATH="$OSSL/include" CARGO_BUILD_JOBS=2
 cd "$HOME/clawd/skcapstone-repos/sk_pgp"
-echo "=== maturin develop @ $(date) (rustc $(rustc --version)) ==="
-~/.skenv/bin/maturin develop --release 2>&1
-echo "=== exit=$? @ $(date) ==="
+rm -f target/wheels/*.whl
+~/.skenv/bin/maturin build --release --interpreter ~/.skenv/bin/python
+WHL=$(ls -t target/wheels/sk_pgp-*.whl | head -1)
+~/.skenv/bin/pip install --no-deps --force-reinstall "$WHL"
+~/.skenv/bin/python -c "import sk_pgp; print('sk_pgp', sk_pgp.__version__, 'installed + importable ✅')"
