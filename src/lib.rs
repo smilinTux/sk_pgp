@@ -26,7 +26,7 @@ use sequoia_openpgp as openpgp;
 use openpgp::cert::prelude::*;
 use openpgp::cert::{CertBuilder, CipherSuite};
 use openpgp::crypto::Password;
-use openpgp::packet::prelude::KeyFlags;
+use openpgp::types::KeyFlags;
 use openpgp::parse::stream::{
     DetachedVerifierBuilder, MessageLayer, MessageStructure, VerificationHelper,
 };
