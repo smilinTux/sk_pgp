@@ -1,0 +1,41 @@
+[package]
+name = "sk_pgp"
+version = "0.1.0"
+edition = "2021"
+# sequoia-openpgp 2.2.0-pqc.1 requires a recent toolchain; built here with
+# rustc 1.96.0 (rustup). 1.85 is the documented crate floor.
+rust-version = "1.85"
+license = "Apache-2.0"
+description = "Sovereign post-quantum OpenPGP for Python — PyO3 bindings to PQC sequoia-openpgp"
+authors = ["Chef (David)", "Lumina"]
+repository = "https://github.com/smilinTux/sk_pgp"
+# The Rust crate is not published to crates.io; wheels ship to PyPI.
+publish = false
+
+# THE critical bit: build a C-ABI dynamic lib that Python can import.
+[lib]
+name = "_sk_pgp"            # compiled module → import as sk_pgp._sk_pgp (mixed layout)
+crate-type = ["cdylib"]
+
+[dependencies]
+# PyO3 with the Python-extension features.
+#   extension-module : link against libpython at runtime, not build time (wheels)
+#   abi3-py39        : ONE stable-ABI wheel for CPython 3.9+ (no per-version rebuild)
+#   anyhow           : auto-convert anyhow::Error -> PyErr via `?`
+pyo3 = { version = "0.24", features = ["extension-module", "abi3-py39", "anyhow"] }
+
+# The POST-QUANTUM OpenPGP engine. NOTE the exact pinned PQC pre-release — the
+# same crate our `sq 1.4.0-pqc.1` binary was built from. Pinned with `=` so cargo
+# never resolves to a non-PQC release.
+#   default-features = false  -> drops crypto-nettle (which has NO PQC)
+#   crypto-openssl            -> exactly how `sq` was built (linuxbrew OpenSSL 3.6.2)
+sequoia-openpgp = { version = "=2.2.0-pqc.1", default-features = false, features = ["crypto-openssl", "compression"] }
+
+# sequoia's Result<T> = std::result::Result<T, anyhow::Error>; depend on anyhow
+# to construct/propagate errors at the FFI boundary.
+anyhow = "1"
+
+# If the PQC crate must be sourced from a vendored path instead of the registry
+# cache, point cargo at it here (left inert; the registry cache resolves it):
+# [patch.crates-io]
+# sequoia-openpgp = { path = "../vendor/sequoia-openpgp-2.2.0-pqc.1" }

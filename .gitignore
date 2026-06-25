@@ -1,0 +1,24 @@
+# Rust / Cargo
+/target/
+**/*.rs.bk
+Cargo.lock
+
+# Python build artifacts
+*.so
+*.pyd
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# maturin / packaging
+/dist/
+/build/
+*.egg-info/
+.venv/
+wheels/
+
+# editor / OS
+.DS_Store
+*.swp

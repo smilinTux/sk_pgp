@@ -1,0 +1,40 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "sk_pgp"
+description = "Sovereign post-quantum OpenPGP library for Python (PyO3 + sequoia-openpgp PQC)"
+requires-python = ">=3.9"
+license = { text = "Apache-2.0" }
+keywords = ["openpgp", "pgp", "post-quantum", "pqc", "ml-dsa", "ml-kem", "sequoia", "rfc9580"]
+authors = [
+  { name = "Chef (David)" },
+  { name = "Lumina" },
+]
+classifiers = [
+  "Programming Language :: Rust",
+  "Programming Language :: Python :: Implementation :: CPython",
+  "License :: OSI Approved :: Apache Software License",
+  "Topic :: Security :: Cryptography",
+]
+dynamic = ["version"]            # version comes from Cargo.toml via maturin
+
+[project.urls]
+Homepage = "https://github.com/smilinTux/sk_pgp"
+Repository = "https://github.com/smilinTux/sk_pgp"
+
+[tool.maturin]
+# Mixed layout: pure-Python sources live under python/, the compiled ext is added.
+python-source = "python"
+# The Rust ext is exposed as a submodule of the package (sk_pgp._sk_pgp);
+# python/sk_pgp/__init__.py re-exports its symbols.
+module-name = "sk_pgp._sk_pgp"
+# Build the abi3 wheel (must agree with the abi3-py39 Cargo feature).
+features = ["pyo3/extension-module"]
+
+# Build env (export before `maturin build`/`develop`; matches the sq PQC build):
+#   source ~/.cargo/env                                            # rustc 1.96.0
+#   export OPENSSL_DIR=/home/linuxbrew/.linuxbrew/opt/openssl@3    # OpenSSL 3.6.2
+#   export BINDGEN_EXTRA_CLANG_ARGS="-I${OPENSSL_DIR}/include"
+#   # liboqs 0.14 at ~/.local/lib/liboqs.so — ensure on the linker/runtime path.
