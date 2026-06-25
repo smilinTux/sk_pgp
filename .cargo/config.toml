@@ -1,0 +1,9 @@
+# Bake the brew-OpenSSL 3.6.2 rpath into the extension so it loads without
+# LD_LIBRARY_PATH. (sk_pgp links the crypto-openssl Sequoia backend against
+# linuxbrew OpenSSL 3.6.2 — the same provider sq 1.4.0-pqc was built with.)
+[build]
+rustflags = ["-C", "link-arg=-Wl,-rpath,/home/linuxbrew/.linuxbrew/opt/openssl@3/lib"]
+
+[env]
+OPENSSL_DIR = "/home/linuxbrew/.linuxbrew/opt/openssl@3"
+PKG_CONFIG_PATH = "/home/linuxbrew/.linuxbrew/opt/openssl@3/lib/pkgconfig"
