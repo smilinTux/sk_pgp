@@ -121,3 +121,9 @@ as-is; per-arch wheels are CI follow-up.
 ## License
 
 Apache-2.0. See [LICENSE](LICENSE).
+
+## Related projects / See also
+- ⬆️ **Depends on:** [sequoia-pgp](https://gitlab.com/sequoia-pgp/sequoia) — the PQC OpenPGP engine `sk_pgp` binds (via PyO3).
+- ⬇️ **Used by:** [capauth](https://github.com/smilinTux/capauth) — issues the post-quantum signing root through `sk_pgp`; [skcomms](https://github.com/smilinTux/skcomms) / [skchat](https://github.com/smilinTux/skchat) — the signing layers migrating off PGPy onto `sk_pgp`.
+- ↔️ **Sibling:** [sk_pqc](https://github.com/smilinTux/sk_pqc) — the Dart/Flutter hybrid-KEM companion (web + native).
+- 📐 **Standards:** [sk-standards](https://github.com/smilinTux/sk-standards) — crypto · data-flow · version · doc/SOP.
