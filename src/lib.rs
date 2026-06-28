@@ -24,15 +24,12 @@ use pyo3::types::PyBytes;
 
 use num_bigint::BigUint;
 
-use sequoia_openpgp as openpgp;
 use openpgp::cert::{CertBuilder, CipherSuite};
-use openpgp::crypto::{KeyPair, Password, SessionKey};
 use openpgp::crypto::mpi::PublicKey as MpiPublicKey;
+use openpgp::crypto::{KeyPair, Password, SessionKey};
 use openpgp::packet::key::{Key6, SecretParts, SubordinateRole};
 use openpgp::packet::signature::SignatureBuilder;
 use openpgp::packet::{Key as PgpKey, PKESK, SKESK};
-use openpgp::types::{KeyFlags, SignatureType, SymmetricAlgorithm};
-use openpgp::Packet;
 use openpgp::parse::stream::{
     DecryptionHelper, DecryptorBuilder, DetachedVerifierBuilder, MessageLayer, MessageStructure,
     VerificationHelper, VerifierBuilder,
@@ -41,14 +38,22 @@ use openpgp::parse::Parse;
 use openpgp::policy::StandardPolicy;
 use openpgp::serialize::stream::{Armorer, Encryptor, LiteralWriter, Message, Signer};
 use openpgp::serialize::Serialize;
+use openpgp::types::{KeyFlags, SignatureType, SymmetricAlgorithm};
+use openpgp::Packet;
 use openpgp::Profile;
+use sequoia_openpgp as openpgp;
 
 // ---------------------------------------------------------------------------
 // errors
 // ---------------------------------------------------------------------------
 
 // A named Python exception so callers can `except sk_pgp.PgpError`.
-create_exception!(_sk_pgp, PgpError, PyException, "Error from the sk_pgp OpenPGP engine.");
+create_exception!(
+    _sk_pgp,
+    PgpError,
+    PyException,
+    "Error from the sk_pgp OpenPGP engine."
+);
 
 /// Map any displayable error into our Python exception.
 fn to_py_err<E: std::fmt::Display>(e: E) -> PyErr {
@@ -102,10 +107,7 @@ impl VerificationHelper for OneCertHelper {
 /// `KeyPair`. Decrypts the secret with `password` when it is passphrase-locked.
 /// Shared by `Key.sign_detached` and `Key.sign_inline` so both pick the same key
 /// and obey the same protected-key contract.
-fn unlocked_signing_keypair(
-    cert: &openpgp::Cert,
-    password: Option<&str>,
-) -> PyResult<KeyPair> {
+fn unlocked_signing_keypair(cert: &openpgp::Cert, password: Option<&str>) -> PyResult<KeyPair> {
     let p = StandardPolicy::new();
     let ka = cert
         .keys()
@@ -120,8 +122,8 @@ fn unlocked_signing_keypair(
 
     let mut key = ka.key().clone();
     if key.secret().is_encrypted() {
-        let pw = password
-            .ok_or_else(|| PgpError::new_err("key is protected; password required"))?;
+        let pw =
+            password.ok_or_else(|| PgpError::new_err("key is protected; password required"))?;
         key = key.decrypt_secret(&Password::from(pw)).map_err(to_py_err)?;
     }
     key.into_keypair().map_err(to_py_err)
@@ -284,7 +286,9 @@ impl Cert {
     #[pyo3(signature = (sig, data))]
     fn verify_detached(&self, sig: &[u8], data: &[u8]) -> PyResult<bool> {
         let p = StandardPolicy::new();
-        let helper = OneCertHelper { cert: self.cert.clone() };
+        let helper = OneCertHelper {
+            cert: self.cert.clone(),
+        };
         let mut v = DetachedVerifierBuilder::from_bytes(sig)
             .map_err(to_py_err)?
             .with_policy(&p, None, helper)
@@ -318,7 +322,8 @@ impl Cert {
             )),
             other => Err(PgpError::new_err(format!(
                 "primary key is not RSA (got {:?}); no RSA public numbers to emit",
-                other.algo()
+                other
+                    .algo()
                     .map(|a| a.to_string())
                     .unwrap_or_else(|| "unknown".into()),
             ))),
@@ -359,7 +364,8 @@ impl Cert {
             other => {
                 return Err(PgpError::new_err(format!(
                     "primary key is not Ed25519 (got {:?}); no Ed25519 point to emit",
-                    other.algo()
+                    other
+                        .algo()
                         .map(|a| a.to_string())
                         .unwrap_or_else(|| "unknown".into()),
                 )));
@@ -430,7 +436,9 @@ impl Cert {
         signed: &[u8],
     ) -> PyResult<(bool, Bound<'py, PyBytes>)> {
         let p = StandardPolicy::new();
-        let helper = OneCertHelper { cert: self.cert.clone() };
+        let helper = OneCertHelper {
+            cert: self.cert.clone(),
+        };
         let mut v = VerifierBuilder::from_bytes(signed)
             .map_err(to_py_err)?
             .with_policy(&p, None, helper)
@@ -524,7 +532,9 @@ impl Key {
                 None::<CipherSuite>,
             )
             .add_subkey(
-                KeyFlags::empty().set_transport_encryption().set_storage_encryption(),
+                KeyFlags::empty()
+                    .set_transport_encryption()
+                    .set_storage_encryption(),
                 None::<std::time::Duration>,
                 None::<CipherSuite>,
             );
@@ -559,13 +569,20 @@ impl Key {
     /// ⇄ `key.is_protected`.
     #[getter]
     fn is_protected(&self) -> bool {
-        self.cert.keys().secret().any(|ka| ka.key().secret().is_encrypted())
+        self.cert
+            .keys()
+            .secret()
+            .any(|ka| ka.key().secret().is_encrypted())
     }
 
     /// ASCII-armored secret key (PGP PRIVATE KEY BLOCK). REAL-BOUND.  ⇄ `str(key)`.
     fn to_armor(&self) -> PyResult<String> {
         let mut buf = Vec::new();
-        self.cert.as_tsk().armored().serialize(&mut buf).map_err(to_py_err)?;
+        self.cert
+            .as_tsk()
+            .armored()
+            .serialize(&mut buf)
+            .map_err(to_py_err)?;
         String::from_utf8(buf).map_err(to_py_err)
     }
 
@@ -626,7 +643,10 @@ impl Key {
         {
             let message = Message::new(&mut sink);
             let message = Armorer::new(message).build().map_err(to_py_err)?;
-            let signer = Signer::new(message, keypair).map_err(to_py_err)?.build().map_err(to_py_err)?;
+            let signer = Signer::new(message, keypair)
+                .map_err(to_py_err)?
+                .build()
+                .map_err(to_py_err)?;
             let mut lw = LiteralWriter::new(signer).build().map_err(to_py_err)?;
             lw.write_all(data).map_err(to_py_err)?;
             lw.finalize().map_err(to_py_err)?;
@@ -706,7 +726,9 @@ impl Key {
         if primary.secret().is_encrypted() {
             let pw = password
                 .ok_or_else(|| PgpError::new_err("primary key is protected; password required"))?;
-            primary = primary.decrypt_secret(&Password::from(pw)).map_err(to_py_err)?;
+            primary = primary
+                .decrypt_secret(&Password::from(pw))
+                .map_err(to_py_err)?;
         }
         let mut primary_kp = primary.into_keypair().map_err(to_py_err)?;
 
