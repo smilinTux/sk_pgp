@@ -23,7 +23,6 @@ use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 
 use sequoia_openpgp as openpgp;
-use openpgp::cert::prelude::*;
 use openpgp::cert::{CertBuilder, CipherSuite};
 use openpgp::crypto::Password;
 use openpgp::types::KeyFlags;

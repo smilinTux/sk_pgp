@@ -35,3 +35,17 @@ Initial buildable skeleton: PyO3 bindings to PQC `sequoia-openpgp =2.2.0-pqc.1`
 - Honesty: **post-quantum / quantum-resistant, never "quantum-proof."** Hybrid
   composite sigs valid iff **both** legs verify. Binds sequoia + liboqs; no
   hand-rolled crypto. FIPS 203/204/205, RFC 8032/9580, draft-ietf-openpgp-pqc.
+
+### Added — docs / packaging (sk-standards parity)
+
+- README brought to **hub** form: badge row, an **Experimental · pre-1.0 · NOT
+  independently security-audited** banner, and explicit `sk-pqc-{py,rs,dart}` /
+  capauth / skcomms / skchat / sk-standards cross-links.
+- `docs/ARCHITECTURE.md` — the data-flow view (layering + keygen + detached
+  sign→verify sequence diagrams + trust-boundary table), per DATA_FLOW_STANDARD.
+- `examples/` — runnable, self-checking `pqc_v6_sign_verify.py` (ML-DSA-87 + Ed448
+  v6 keygen → sign → verify, with composite AND-semantics + tamper check) and a fast
+  `classical_quickstart.py`, plus `examples/README.md`.
+- `pyproject.toml`: PyPI metadata polish — `readme`, expanded keywords + classifiers
+  (`Development Status :: 3 - Alpha`, email/crypto topics), Documentation/Changelog/
+  Issues URLs, and a registered `slow` pytest marker. (Still **not** published to PyPI.)

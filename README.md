@@ -1,17 +1,33 @@
 # sk_pgp
 
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.9%2B-3776ab.svg)](pyproject.toml)
+[![Engine](https://img.shields.io/badge/engine-sequoia--openpgp%202.2.0--pqc.1-orange.svg)](https://gitlab.com/sequoia-pgp/sequoia)
+[![Suite](https://img.shields.io/badge/default-mldsa87--ed448%20(NIST%20L5)-1f6feb.svg)](https://github.com/smilinTux/sk-standards)
+[![Standards](https://img.shields.io/badge/FIPS-203%20%2F%20204-555.svg)](https://csrc.nist.gov/pubs/fips/204/final)
+
 Sovereign **post-quantum OpenPGP for Python** — PyO3 bindings to the PQC-capable
 **sequoia-openpgp** (`=2.2.0-pqc.1`, the exact crate our `sq 1.4.0-pqc.1` was
-built from), packaged with **maturin**.
+built from), packaged with **maturin**. It is the sovereign **PGPy / `gpg` 2.4
+replacement** for the SK ecosystem's OpenPGP signing surface.
+
+> ⚠️ **Experimental · pre-1.0 · NOT independently security-audited.** This is the
+> Python *binding surface* over the vetted **sequoia-openpgp** PQC engine + OpenSSL 3.6
+> + liboqs 0.14 — but the package itself has had **no third-party security audit,
+> fuzzing, or formal review**. sk_pgp adds **no original cryptography**; the original
+> code is the PyO3 wiring. We apply our own honest-claims discipline to the library
+> itself: **review it yourself before production use, and don't trust it beyond the
+> evidence.** (See [SECURITY.md](SECURITY.md) and [KNOWN_ISSUES.md](KNOWN_ISSUES.md).)
 
 This is the **PGPy replacement**: it can load **v6 / RFC 9580** + **post-quantum**
 (ML-DSA / ML-KEM) OpenPGP keys, **sign** (including the **ML-DSA-87 + Ed448** and
 **ML-DSA-65 + Ed25519** composites), **verify**, and handle certs — operations
 **PGPy and gpg 2.4 cannot do** — in-process, instead of shelling out to `sq`.
 
-Sibling to the Dart [`sk_pqc`](../sk_pqc) library (hybrid X25519+ML-KEM-768 KEM).
-Where `sk_pqc` does **key encapsulation**, `sk_pgp` does **OpenPGP identity +
-signatures** (and, later, ML-KEM encryption).
+Sibling to the [`sk-pqc`](https://github.com/smilinTux/sk-pqc-py) family (hybrid
+X25519 + ML-KEM-768 KEM, in Python/Rust/Dart). Where `sk-pqc` does **key
+encapsulation**, `sk_pgp` does **OpenPGP identity + signatures** (and, later,
+ML-KEM encryption).
 
 ```python
 import sk_pgp
@@ -124,6 +140,12 @@ Apache-2.0. See [LICENSE](LICENSE).
 
 ## Related projects / See also
 - ⬆️ **Depends on:** [sequoia-pgp](https://gitlab.com/sequoia-pgp/sequoia) — the PQC OpenPGP engine `sk_pgp` binds (via PyO3).
+- ↔️ **Sibling (Python):** [sk-pqc](https://github.com/smilinTux/sk-pqc-py) ([PyPI](https://pypi.org/project/sk-pqc/)) — hybrid X25519 + ML-KEM-768 **confidentiality** primitives (the encryption counterpart to this signing library).
+- ↔️ **Sibling (Rust):** [sk-pqc](https://github.com/smilinTux/sk-pqc-rs) ([crates.io](https://crates.io/crates/sk-pqc)) — the native Rust hybrid-KEM core (full module set + wire formats).
+- ↔️ **Sibling (Dart):** [sk_pqc](https://github.com/smilinTux/sk-pqc-dart) ([pub.dev](https://pub.dev/packages/sk_pqc)) — the Dart/Flutter hybrid-KEM companion (web + native).
 - ⬇️ **Used by:** [capauth](https://github.com/smilinTux/capauth) — issues the post-quantum signing root through `sk_pgp`; [skcomms](https://github.com/smilinTux/skcomms) / [skchat](https://github.com/smilinTux/skchat) — the signing layers migrating off PGPy onto `sk_pgp`.
-- ↔️ **Sibling:** [sk_pqc](https://github.com/smilinTux/sk_pqc) — the Dart/Flutter hybrid-KEM companion (web + native).
 - 📐 **Standards:** [sk-standards](https://github.com/smilinTux/sk-standards) — crypto · data-flow · version · doc/SOP.
+
+Where `sk-pqc` does **key encapsulation** (confidentiality), `sk_pgp` does **OpenPGP
+identity + signatures** (and, later, ML-KEM message encryption). Together they cover the
+SK ecosystem's post-quantum surface.

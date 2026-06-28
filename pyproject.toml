@@ -4,25 +4,44 @@ build-backend = "maturin"
 
 [project]
 name = "sk_pgp"
-description = "Sovereign post-quantum OpenPGP library for Python (PyO3 + sequoia-openpgp PQC)"
+description = "Sovereign post-quantum OpenPGP for Python (PyO3 + sequoia-openpgp PQC) — the PGPy / gpg-2.4 replacement"
+readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "Apache-2.0" }
-keywords = ["openpgp", "pgp", "post-quantum", "pqc", "ml-dsa", "ml-kem", "sequoia", "rfc9580"]
+keywords = [
+  "openpgp", "pgp", "pgpy", "gnupg", "gpg",
+  "post-quantum", "pqc", "quantum-resistant",
+  "ml-dsa", "ml-kem", "mldsa87", "ed448", "dilithium", "kyber",
+  "sequoia", "rfc9580", "fips204", "fips203", "signatures", "cryptography",
+]
 authors = [
   { name = "Chef (David)" },
   { name = "Lumina" },
 ]
 classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
   "Programming Language :: Rust",
+  "Programming Language :: Python :: 3",
   "Programming Language :: Python :: Implementation :: CPython",
   "License :: OSI Approved :: Apache Software License",
+  "Operating System :: POSIX :: Linux",
   "Topic :: Security :: Cryptography",
+  "Topic :: Communications :: Email",
 ]
 dynamic = ["version"]            # version comes from Cargo.toml via maturin
 
 [project.urls]
 Homepage = "https://github.com/smilinTux/sk_pgp"
 Repository = "https://github.com/smilinTux/sk_pgp"
+Documentation = "https://github.com/smilinTux/sk_pgp/blob/main/SOP.md"
+Changelog = "https://github.com/smilinTux/sk_pgp/blob/main/CHANGELOG.md"
+Issues = "https://github.com/smilinTux/sk_pgp/issues"
+
+[tool.pytest.ini_options]
+markers = [
+  "slow: marks tests that do a real PQC keygen (deselect with '-m \"not slow\"')",
+]
 
 [tool.maturin]
 # Mixed layout: pure-Python sources live under python/, the compiled ext is added.
