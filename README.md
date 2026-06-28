@@ -1,5 +1,6 @@
 # sk_pgp
 
+[![CI](https://github.com/smilinTux/sk_pgp/actions/workflows/ci.yml/badge.svg)](https://github.com/smilinTux/sk_pgp/actions/workflows/ci.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.9%2B-3776ab.svg)](pyproject.toml)
 [![Engine](https://img.shields.io/badge/engine-sequoia--openpgp%202.2.0--pqc.1-orange.svg)](https://gitlab.com/sequoia-pgp/sequoia)

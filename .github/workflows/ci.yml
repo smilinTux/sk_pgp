@@ -1,0 +1,170 @@
+name: CI
+
+# Honest CI for sk_pgp — the PyO3 + maturin binding over the PQC-capable
+# sequoia-openpgp (=2.2.0-pqc.1, crypto-openssl backend).
+#
+# This crate has NO pure-Rust path: `[lib] crate-type = ["cdylib"]` with
+# `default-features = false` on sequoia-openpgp, so a build REQUIRES a
+# PQC-capable OpenSSL (>= 3.5, with ML-DSA / ML-KEM). We get that the SAME way
+# the local build does: Homebrew's `openssl@3`. Crucially, GitHub's ubuntu
+# runners install Homebrew under /home/linuxbrew/.linuxbrew — the exact prefix
+# baked as an rpath in .cargo/config.toml — so the wheel's compiled extension
+# resolves brew's libcrypto on the runner with no extra wiring.
+#
+# Toolchain note: Cargo.toml floor is rust-version = "1.85" (Cargo.lock is the
+# v4 format). We use `stable`, which is well past that floor, and `--locked`.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "python/**"
+      - "tests/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "pyproject.toml"
+      - ".cargo/**"
+      - ".github/workflows/ci.yml"
+  pull_request:
+    paths:
+      - "src/**"
+      - "python/**"
+      - "tests/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "pyproject.toml"
+      - ".cargo/**"
+      - ".github/workflows/ci.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # ----------------------------------------------------------------------
+  # Cheap, standalone formatting gate. rustfmt only parses source — it needs
+  # no OpenSSL and compiles nothing, so it stays fast and independent of the
+  # build job. This is a HARD gate (misformatted code fails the run).
+  # ----------------------------------------------------------------------
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust (stable, rustfmt)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+
+  # ----------------------------------------------------------------------
+  # The real, loud functional gate: build the maturin wheel against brew's
+  # PQC OpenSSL, install it, PROVE it imports (so the pytest importorskip can
+  # never silently no-op), then run the FULL suite incl. the @slow PQC tests.
+  # Mirrors the known-passing local run: `maturin build` -> pip install ->
+  # pytest (tests/test_smoke.py + tests/test_inline_and_kem.py).
+  # ----------------------------------------------------------------------
+  build-test:
+    name: build wheel + pytest (PQC)
+    runs-on: ubuntu-latest
+    env:
+      # Matches build.sh / .cargo/config.toml exactly. The [env] block in
+      # .cargo/config.toml also sets OPENSSL_DIR + PKG_CONFIG_PATH for cargo,
+      # but we set them here too so non-cargo steps (auditwheel scan, runtime)
+      # see them as well.
+      OPENSSL_DIR: /home/linuxbrew/.linuxbrew/opt/openssl@3
+      PKG_CONFIG_PATH: /home/linuxbrew/.linuxbrew/opt/openssl@3/lib/pkgconfig
+      LD_LIBRARY_PATH: /home/linuxbrew/.linuxbrew/opt/openssl@3/lib
+      BINDGEN_EXTRA_CLANG_ARGS: -I/home/linuxbrew/.linuxbrew/opt/openssl@3/include
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install clang / pkg-config (bindgen needs libclang)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-dev pkg-config
+
+      - name: Install PQC OpenSSL (Homebrew openssl@3, >= 3.5 -> ML-DSA/ML-KEM)
+        run: |
+          brew install openssl@3
+          echo "Resolved OpenSSL:"
+          "${OPENSSL_DIR}/bin/openssl" version
+          # Fail loud if brew shipped a pre-PQC OpenSSL (<3.5): the PQC tests
+          # would fail anyway, so surface it here with a clear message.
+          ver="$("${OPENSSL_DIR}/bin/openssl" version | awk '{print $2}')"
+          major="${ver%%.*}"; rest="${ver#*.}"; minor="${rest%%.*}"
+          if [ "$major" -lt 3 ] || { [ "$major" -eq 3 ] && [ "$minor" -lt 5 ]; }; then
+            echo "::error::OpenSSL $ver has no ML-DSA/ML-KEM (need >= 3.5)"; exit 1
+          fi
+
+      - name: Install liboqs (documented dep — not required for crypto-openssl)
+        # The crypto-openssl backend uses OpenSSL's NATIVE PQC (>= 3.5), so the
+        # build does not link liboqs. We install it because pyproject.toml
+        # documents liboqs 0.14 in the build env; best-effort, never blocking.
+        continue-on-error: true
+        run: brew install liboqs
+
+      - name: Install Rust (stable >= 1.85 floor; --locked honors v4 Cargo.lock)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install maturin + pytest
+        run: python -m pip install --upgrade "maturin>=1.0,<2.0" pytest
+
+      - name: clippy (advisory — errors already fail the wheel build)
+        continue-on-error: true
+        run: cargo clippy --lib --no-deps --locked --features pyo3/extension-module
+
+      - name: Build the wheel (maturin, brew OpenSSL via baked rpath)
+        # CI builds an in-environment wheel (--compatibility linux skips the
+        # auditwheel manylinux repair). The baked rpath in .cargo/config.toml
+        # makes the extension resolve brew's libcrypto on this same runner, so
+        # it imports and tests run. The SELF-CONTAINED release wheel (auditwheel
+        # bundles brew libcrypto under a private SONAME) is produced by build.sh
+        # — see KNOWN_ISSUES.md #1.
+        run: |
+          maturin build --release --locked --compatibility linux \
+            --interpreter python3.12
+          ls -l target/wheels/
+
+      - name: Install the freshly built wheel
+        run: |
+          whl="$(ls -t target/wheels/sk_pgp-*.whl | head -1)"
+          echo "Installing $whl"
+          python -m pip install --no-deps --force-reinstall "$whl"
+
+      - name: Import guard (defeats pytest importorskip green-on-skip)
+        # If the wheel did not build/install, every test would be SKIPPED via
+        # `pytest.importorskip("sk_pgp")` and the job would go falsely green.
+        # This step fails LOUD instead.
+        run: |
+          python - <<'PY'
+          import hashlib, ssl  # force system libcrypto to load first (SONAME smoke)
+          hashlib.sha256(b"x")
+          import sk_pgp
+          print("sk_pgp", sk_pgp.__version__, "imported OK")
+          PY
+
+      - name: pytest — fast suite (classical, no PQC keygen)
+        run: python -m pytest -m "not slow" -v -ra --strict-markers
+
+      - name: pytest — slow PQC suite (real mldsa87-ed448 keygen + ML-KEM)
+        # These are the @pytest.mark.slow cases (real FIPS-204 keygen + FIPS-203
+        # ML-KEM round-trip). Kept in their own step: if the marker matched zero
+        # tests, pytest exits 5 (no tests collected) and this step fails loud —
+        # never a silent green-on-skip.
+        run: python -m pytest -m "slow" -v -ra --strict-markers
