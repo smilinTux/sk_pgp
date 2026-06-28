@@ -294,6 +294,12 @@ flowchart TD
 > is **gated on the KEM encrypt/decrypt stubs being implemented** (§9) — until then,
 > message-crypto call sites stay on their existing path.
 
+### Front-end / Exposure
+
+Per [sk-standards `UNIFIED_INGRESS_STANDARD.md`](https://github.com/smilinTux/sk-standards/blob/main/standards/UNIFIED_INGRESS_STANDARD.md):
+**N/A — no network surface (library).** `sk_pgp` is a Python OpenPGP-PQC library; it has
+no daemon, port, or listener and answers no public `:443` route.
+
 ---
 
 ## 6. Configuration / Usage
