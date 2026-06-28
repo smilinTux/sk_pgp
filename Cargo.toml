@@ -22,7 +22,12 @@ crate-type = ["cdylib"]
 #   extension-module : link against libpython at runtime, not build time (wheels)
 #   abi3-py39        : ONE stable-ABI wheel for CPython 3.9+ (no per-version rebuild)
 #   anyhow           : auto-convert anyhow::Error -> PyErr via `?`
-pyo3 = { version = "0.24", features = ["extension-module", "abi3-py39", "anyhow"] }
+#   num-bigint       : convert arbitrary-precision ints (RSA n/e) <-> Python int
+pyo3 = { version = "0.24", features = ["extension-module", "abi3-py39", "anyhow", "num-bigint"] }
+
+# Arbitrary-precision integers for the RSA JWK exporter — RSA moduli are far
+# wider than u64; pyo3's `num-bigint` feature converts BigUint <-> Python int.
+num-bigint = "0.4"
 
 # The POST-QUANTUM OpenPGP engine. NOTE the exact pinned PQC pre-release — the
 # same crate our `sq 1.4.0-pqc.1` binary was built from. Pinned with `=` so cargo

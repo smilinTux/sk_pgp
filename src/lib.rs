@@ -22,11 +22,17 @@ use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 
+use num_bigint::BigUint;
+
 use sequoia_openpgp as openpgp;
 use openpgp::cert::{CertBuilder, CipherSuite};
 use openpgp::crypto::{KeyPair, Password, SessionKey};
-use openpgp::packet::{PKESK, SKESK};
-use openpgp::types::{KeyFlags, SymmetricAlgorithm};
+use openpgp::crypto::mpi::PublicKey as MpiPublicKey;
+use openpgp::packet::key::{Key6, SecretParts, SubordinateRole};
+use openpgp::packet::signature::SignatureBuilder;
+use openpgp::packet::{Key as PgpKey, PKESK, SKESK};
+use openpgp::types::{KeyFlags, SignatureType, SymmetricAlgorithm};
+use openpgp::Packet;
 use openpgp::parse::stream::{
     DecryptionHelper, DecryptorBuilder, DetachedVerifierBuilder, MessageLayer, MessageStructure,
     VerificationHelper, VerifierBuilder,
@@ -49,11 +55,7 @@ fn to_py_err<E: std::fmt::Display>(e: E) -> PyErr {
     PgpError::new_err(e.to_string())
 }
 
-/// Uniform marker for binding methods that are intentionally not implemented yet
-/// in this skeleton. Returns a catchable `PgpError` rather than panicking.
-fn todo_err(what: &str) -> PyErr {
-    PgpError::new_err(format!("sk_pgp: {what} is not implemented yet (skeleton TODO)"))
-}
+// (No `todo_err` marker remains — the entire binding surface is real-bound.)
 
 // ---------------------------------------------------------------------------
 // helpers
@@ -298,18 +300,72 @@ impl Cert {
         self.to_armor()
     }
 
-    // -- DID / JWK support (capauth/did.py) — TODO-STUBBED -----------------
+    // -- DID / JWK support (capauth/did.py) — REAL-BOUND -------------------
 
-    /// RSA public params `(n, e)` for JWK emission. TODO-STUB.
-    /// Needs `key.pubkey.public_key` material extraction; the exact sequoia
-    /// `mpi::PublicKey::RSA { n, e }` access path is not yet pinned in recon.
-    fn rsa_public_numbers(&self) -> PyResult<(u64, u64)> {
-        Err(todo_err("Cert.rsa_public_numbers"))
+    /// RSA public params `(n, e)` of the **primary key**, as Python ints for
+    /// JWK emission (`n`/`e` base64url in did.py). REAL-BOUND.
+    ///
+    /// Returns arbitrary-precision integers (an RSA-3k modulus is ~3072 bits,
+    /// far wider than u64) read straight from the sequoia
+    /// `mpi::PublicKey::RSA { n, e }` MPIs (big-endian). Raises `PgpError` when
+    /// the primary key is not RSA (e.g. an Ed25519/PQC identity).
+    /// ⇄ `_pgp_armor_to_rsa_numbers(armor) -> (n, e)`.
+    fn rsa_public_numbers(&self) -> PyResult<(BigUint, BigUint)> {
+        match self.cert.primary_key().key().mpis() {
+            MpiPublicKey::RSA { n, e } => Ok((
+                BigUint::from_bytes_be(n.value()),
+                BigUint::from_bytes_be(e.value()),
+            )),
+            other => Err(PgpError::new_err(format!(
+                "primary key is not RSA (got {:?}); no RSA public numbers to emit",
+                other.algo()
+                    .map(|a| a.to_string())
+                    .unwrap_or_else(|| "unknown".into()),
+            ))),
+        }
     }
 
-    /// Raw Ed25519 public point for JWK emission. TODO-STUB.
-    fn ed25519_public_bytes<'py>(&self, _py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
-        Err(todo_err("Cert.ed25519_public_bytes"))
+    /// Raw 32-byte Ed25519 public point of the **primary key**, for JWK / did:key
+    /// emission (the `x` coordinate of an OKP/Ed25519 JWK). REAL-BOUND.
+    ///
+    /// Handles both RFC 9580 (v6) keys — `mpi::PublicKey::Ed25519 { a }`, already
+    /// the bare 32-byte point — and legacy v4 EdDSA keys — `EdDSA { curve, q }`,
+    /// whose MPI carries the native `0x40`-prefixed point (the prefix is
+    /// stripped). Raises `PgpError` when the primary key is not Ed25519.
+    fn ed25519_public_bytes<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
+        let raw: Vec<u8> = match self.cert.primary_key().key().mpis() {
+            // v6 / RFC 9580: bare 32-byte public point.
+            MpiPublicKey::Ed25519 { a } => a.to_vec(),
+            // v4 EdDSA: the point is an MPI, prefixed with 0x40 (native form).
+            MpiPublicKey::EdDSA { curve, q } => {
+                if curve != &openpgp::types::Curve::Ed25519 {
+                    return Err(PgpError::new_err(format!(
+                        "primary EdDSA key is on {curve}, not Ed25519"
+                    )));
+                }
+                let v = q.value();
+                // Strip the leading 0x40 (point compression) octet if present.
+                match v.first() {
+                    Some(0x40) if v.len() == 33 => v[1..].to_vec(),
+                    _ if v.len() == 32 => v.to_vec(),
+                    _ => {
+                        return Err(PgpError::new_err(format!(
+                            "unexpected Ed25519 point encoding ({} bytes)",
+                            v.len()
+                        )));
+                    }
+                }
+            }
+            other => {
+                return Err(PgpError::new_err(format!(
+                    "primary key is not Ed25519 (got {:?}); no Ed25519 point to emit",
+                    other.algo()
+                        .map(|a| a.to_string())
+                        .unwrap_or_else(|| "unknown".into()),
+                )));
+            }
+        };
+        Ok(PyBytes::new(py, &raw))
     }
 
     /// Encrypt `plaintext` to this cert's encryption (KEM/ECDH) subkey. REAL-BOUND.
@@ -549,7 +605,7 @@ impl Key {
         self.to_armor()
     }
 
-    // -- TODO-STUBBED ------------------------------------------------------
+    // -- inline sign / decrypt / additive PQC subkeys (all REAL-BOUND) ------
 
     /// Create an armored INLINE-signed message (data + signature in one OpenPGP
     /// message). REAL-BOUND. Counterpart of `Cert.verify_inline`; the composite
@@ -607,14 +663,133 @@ impl Key {
         Ok(PyBytes::new(py, &out))
     }
 
-    /// Additively attach PQC subkeys (ML-DSA-87+Ed448 sign + ML-KEM-1024+X448
-    /// enc), preserving the primary fingerprint. TODO-STUB.
-    /// Needs the sequoia `KeyBuilder` / subkey-binding path (the in-process
-    /// equivalent of `sq key subkey add`), not yet pinned in recon.
+    /// Additively attach PQC subkeys, preserving the primary fingerprint. REAL-BOUND.
+    ///
+    /// Adds a composite **ML-DSA signing** subkey and a composite **ML-KEM
+    /// encryption** subkey to this key without touching the primary or its
+    /// existing subkeys — so the operation is fully reversible (drop the new
+    /// subkeys to recover the original cert). The primary's fingerprint is
+    /// unchanged (verified here; a mismatch raises). The new secret subkeys are
+    /// protected with `password` when one is given (the same passphrase that
+    /// must unlock the primary to sign the binding signatures).
+    ///
+    /// * `mldsa87-ed448`   → ML-DSA-87+Ed448 sign (FIPS 204, L5) + ML-KEM-1024+X448 enc (FIPS 203, L5);
+    /// * `mldsa65-ed25519` → ML-DSA-65+Ed25519 sign (L3) + ML-KEM-768+X25519 enc (L3).
+    ///
+    /// The input MUST be an OpenPGP v6 / RFC 9580 key — PQC algorithms are not
+    /// valid on v4 keys. The signing subkey carries the required embedded
+    /// primary-key-binding (back) signature. Honesty: post-quantum /
+    /// quantum-resistant, never "quantum-proof"; the composite hybrid is valid
+    /// iff both legs hold. In-process equivalent of `sq key subkey add`.
+    /// ⇄ `SequoiaBackend.add_pqc_subkeys`.
     #[pyo3(signature = (password = None, cipher_suite = "mldsa87-ed448"))]
     fn add_pqc_subkeys(&self, password: Option<&str>, cipher_suite: &str) -> PyResult<Key> {
-        let _ = (password, cipher_suite);
-        Err(todo_err("Key.add_pqc_subkeys"))
+        // PQC algorithms are only valid on OpenPGP v6 / RFC 9580 keys; refuse to
+        // graft a v6 PQC subkey onto a v4 primary (matches the `sq` contract:
+        // "can't use algorithms for v4 keys").
+        let ver = self.cert.primary_key().key().version();
+        if ver != 6 {
+            return Err(PgpError::new_err(format!(
+                "add_pqc_subkeys requires an OpenPGP v6 / RFC 9580 primary key; \
+                 this key is v{ver} — PQC algorithms are not valid on v4 keys"
+            )));
+        }
+
+        // The primary key signs the subkey binding signatures — unlock it.
+        let mut primary = self
+            .cert
+            .primary_key()
+            .key()
+            .clone()
+            .parts_into_secret()
+            .map_err(to_py_err)?;
+        if primary.secret().is_encrypted() {
+            let pw = password
+                .ok_or_else(|| PgpError::new_err("primary key is protected; password required"))?;
+            primary = primary.decrypt_secret(&Password::from(pw)).map_err(to_py_err)?;
+        }
+        let mut primary_kp = primary.into_keypair().map_err(to_py_err)?;
+
+        // Generate the two new PQC subkeys for the requested suite.
+        let (sign_sub, enc_sub): (
+            PgpKey<SecretParts, SubordinateRole>,
+            PgpKey<SecretParts, SubordinateRole>,
+        ) = match cipher_suite {
+            "mldsa87-ed448" => (
+                Key6::generate_mldsa87_ed448().map_err(to_py_err)?.into(),
+                Key6::generate_mlkem1024_x448().map_err(to_py_err)?.into(),
+            ),
+            "mldsa65-ed25519" => (
+                Key6::generate_mldsa65_ed25519().map_err(to_py_err)?.into(),
+                Key6::generate_mlkem768_x25519().map_err(to_py_err)?.into(),
+            ),
+            other => {
+                return Err(PgpError::new_err(format!(
+                    "add_pqc_subkeys: unsupported PQC cipher suite: {other}"
+                )))
+            }
+        };
+
+        // ML-DSA signing subkey: needs an embedded primary-key-binding (backsig)
+        // made BY the subkey, proving it consents to the binding.
+        let mut sub_signer = sign_sub.clone().into_keypair().map_err(to_py_err)?;
+        let backsig = SignatureBuilder::new(SignatureType::PrimaryKeyBinding)
+            .sign_primary_key_binding(&mut sub_signer, self.cert.primary_key().key(), &sign_sub)
+            .map_err(to_py_err)?;
+        let sign_binding = SignatureBuilder::new(SignatureType::SubkeyBinding)
+            .set_key_flags(KeyFlags::empty().set_signing())
+            .map_err(to_py_err)?
+            .set_embedded_signature(backsig)
+            .map_err(to_py_err)?;
+        let sign_binding = sign_sub
+            .bind(&mut primary_kp, &self.cert, sign_binding)
+            .map_err(to_py_err)?;
+
+        // ML-KEM encryption subkey: a plain subkey binding (no backsig needed).
+        let enc_binding = SignatureBuilder::new(SignatureType::SubkeyBinding)
+            .set_key_flags(
+                KeyFlags::empty()
+                    .set_transport_encryption()
+                    .set_storage_encryption(),
+            )
+            .map_err(to_py_err)?;
+        let enc_binding = enc_sub
+            .bind(&mut primary_kp, &self.cert, enc_binding)
+            .map_err(to_py_err)?;
+
+        // Protect the new secret subkeys with the same passphrase, if any.
+        let (sign_sub, enc_sub) = if let Some(pw) = password {
+            let pw = Password::from(pw);
+            (
+                sign_sub.encrypt_secret(&pw).map_err(to_py_err)?,
+                enc_sub.encrypt_secret(&pw).map_err(to_py_err)?,
+            )
+        } else {
+            (sign_sub, enc_sub)
+        };
+
+        let orig_fpr = self.cert.fingerprint();
+        let merged = self
+            .cert
+            .clone()
+            .insert_packets(vec![
+                Packet::from(sign_sub),
+                sign_binding.into(),
+                Packet::from(enc_sub),
+                enc_binding.into(),
+            ])
+            .map_err(to_py_err)?
+            .0;
+
+        // Additive invariant: the primary (hence its fingerprint) is unchanged.
+        let new_fpr = merged.fingerprint();
+        if new_fpr != orig_fpr {
+            return Err(PgpError::new_err(format!(
+                "add_pqc_subkeys changed the primary fingerprint ({orig_fpr} -> {new_fpr}); \
+                 refusing to return a non-additive key"
+            )));
+        }
+        Ok(Key { cert: merged })
     }
 }
 

@@ -52,16 +52,22 @@ def test_bad_armor_raises():
         sk_pgp.Cert.from_bytes(b"not a pgp key")
 
 
-@pytest.mark.parametrize(
-    "call",
-    [
-        # Still genuinely stubbed (inline sign/verify + encrypt/decrypt are now
-        # real-bound — see tests/test_inline_and_kem.py).
-        lambda k: k.add_pqc_subkeys(),
-        lambda k: k.cert.rsa_public_numbers(),
-    ],
-)
-def test_todo_stubs_raise(call):
+def test_no_skeleton_stubs_remain():
+    """The whole binding surface is real-bound — nothing returns the skeleton
+    TODO marker any more. A method may still raise PgpError for a *real* reason
+    (e.g. asking for RSA numbers on an Ed25519 key), but never the stub text.
+    """
     key = sk_pgp.Key.generate("S <s@example.com>", "cv25519")
-    with pytest.raises(sk_pgp.PgpError):
-        call(key)
+    surface = [
+        lambda: key.add_pqc_subkeys(),
+        lambda: key.cert.rsa_public_numbers(),
+        lambda: key.cert.ed25519_public_bytes(),
+        lambda: key.sign_inline(b"x"),
+        lambda: key.cert.verify_inline(key.sign_inline(b"x")),
+        lambda: key.cert.encrypt(b"x"),
+    ]
+    for call in surface:
+        try:
+            call()
+        except sk_pgp.PgpError as exc:  # a real error is fine; the stub text is not
+            assert "not implemented yet (skeleton TODO)" not in str(exc), exc
