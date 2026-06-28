@@ -1,0 +1,53 @@
+# cargo-deny supply-chain policy for sk_pgp.
+# Run: cargo deny check          (all four: advisories, licenses, bans, sources)
+# Schema: cargo-deny 0.19.x (config version 2). https://embarkstudios.github.io/cargo-deny/
+
+[graph]
+# pyo3 (extension-module) and sequoia-openpgp are core, non-optional deps —
+# the default feature set already covers the full supply chain.
+all-features = true
+
+[advisories]
+# RustSec advisory DB. Default policy = DENY any crate with an open advisory.
+db-urls = ["https://github.com/rustsec/advisory-db"]
+yanked = "deny"
+ignore = [
+    # NOTHING is silenced. Known-open as of 2026-06-28 (fix = bump pyo3 >= 0.29.0),
+    # both via the REQUIRED pyo3 extension binding:
+    #   RUSTSEC-2026-0177  pyo3 missing Sync bound on PyCFunction::new_closure closures
+    #   RUSTSEC-2026-0176  pyo3 out-of-bounds read in nth/nth_back for PyList/PyTuple iters
+]
+
+[licenses]
+# Mostly permissive. The ONE copyleft entry is the PQC OpenPGP engine itself:
+#   sequoia-openpgp@2.2.0-pqc.1 + buffered-reader@1.4.0 = LGPL-2.0-or-later
+# (weak/relink copyleft). sk_pgp is Apache-2.0, ships full source, and links
+# sequoia as an ordinary Rust dependency — which satisfies the LGPL relink
+# obligation. Allowed deliberately; it is intrinsic to the chosen PQC backend.
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception", # target-lexicon (pyo3 build-dep); standard LLVM exception, permissive
+    "MIT",
+    "BSD-3-Clause",
+    "ISC",
+    "BSL-1.0",            # xxhash-rust (Boost, permissive)
+    "CC0-1.0",           # tiny-keccak (public domain)
+    "Zlib",              # miniz_oxide
+    "Unicode-3.0",       # unicode-ident
+    "Unlicense",
+    "LGPL-2.0-or-later", # sequoia-openpgp + buffered-reader (PQC engine, see note above)
+]
+confidence-threshold = 0.9
+
+[bans]
+# Transitive dupes (thiserror 1/2, itertools 0.11/0.13, generic-array 0.14/1.x,
+# shlex 1/2) — informational, not a failure.
+multiple-versions = "warn"
+wildcards = "allow"
+
+[sources]
+# Only crates.io is trusted — incl. the =2.2.0-pqc.1 sequoia pre-release, which
+# resolves from the public crates.io index (NOT a git or vendored source).
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
