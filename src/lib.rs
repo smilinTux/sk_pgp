@@ -15,7 +15,7 @@
 //! Standards: FIPS 203 (ML-KEM), FIPS 204 (ML-DSA), FIPS 205 (SLH-DSA),
 //! RFC 8032 (EdDSA), RFC 9580 (OpenPGP v6), draft-ietf-openpgp-pqc.
 
-use std::io::Write as _;
+use std::io::{Read as _, Write as _};
 
 use pyo3::create_exception;
 use pyo3::exceptions::PyException;
@@ -24,14 +24,16 @@ use pyo3::types::PyBytes;
 
 use sequoia_openpgp as openpgp;
 use openpgp::cert::{CertBuilder, CipherSuite};
-use openpgp::crypto::Password;
-use openpgp::types::KeyFlags;
+use openpgp::crypto::{KeyPair, Password, SessionKey};
+use openpgp::packet::{PKESK, SKESK};
+use openpgp::types::{KeyFlags, SymmetricAlgorithm};
 use openpgp::parse::stream::{
-    DetachedVerifierBuilder, MessageLayer, MessageStructure, VerificationHelper,
+    DecryptionHelper, DecryptorBuilder, DetachedVerifierBuilder, MessageLayer, MessageStructure,
+    VerificationHelper, VerifierBuilder,
 };
 use openpgp::parse::Parse;
 use openpgp::policy::StandardPolicy;
-use openpgp::serialize::stream::{Armorer, Message, Signer};
+use openpgp::serialize::stream::{Armorer, Encryptor, LiteralWriter, Message, Signer};
 use openpgp::serialize::Serialize;
 use openpgp::Profile;
 
@@ -91,6 +93,116 @@ impl VerificationHelper for OneCertHelper {
             }
         }
         Err(anyhow::anyhow!("no valid signature"))
+    }
+}
+
+/// Select the first usable signing-capable secret key and return an unlocked
+/// `KeyPair`. Decrypts the secret with `password` when it is passphrase-locked.
+/// Shared by `Key.sign_detached` and `Key.sign_inline` so both pick the same key
+/// and obey the same protected-key contract.
+fn unlocked_signing_keypair(
+    cert: &openpgp::Cert,
+    password: Option<&str>,
+) -> PyResult<KeyPair> {
+    let p = StandardPolicy::new();
+    let ka = cert
+        .keys()
+        .secret()
+        .with_policy(&p, None)
+        .supported()
+        .alive()
+        .revoked(false)
+        .for_signing()
+        .nth(0)
+        .ok_or_else(|| PgpError::new_err("no signing-capable secret key"))?;
+
+    let mut key = ka.key().clone();
+    if key.secret().is_encrypted() {
+        let pw = password
+            .ok_or_else(|| PgpError::new_err("key is protected; password required"))?;
+        key = key.decrypt_secret(&Password::from(pw)).map_err(to_py_err)?;
+    }
+    key.into_keypair().map_err(to_py_err)
+}
+
+/// Map a caller-supplied cipher name to a sequoia `SymmetricAlgorithm`.
+/// Honest: this picks the *data* cipher for the message body; the key-wrap is
+/// the recipient's KEM/ECDH (post-quantum ML-KEM for the mldsa* suites).
+fn map_symmetric(cipher: &str) -> PyResult<SymmetricAlgorithm> {
+    Ok(match cipher.to_uppercase().replace('-', "").as_str() {
+        "AES256" => SymmetricAlgorithm::AES256,
+        "AES192" => SymmetricAlgorithm::AES192,
+        "AES128" => SymmetricAlgorithm::AES128,
+        other => {
+            return Err(PgpError::new_err(format!("unsupported cipher: {other}")));
+        }
+    })
+}
+
+/// `VerificationHelper + DecryptionHelper` that decrypts with exactly one TSK's
+/// encryption (KEM/ECDH) subkey. Unlocks the secret with `password` when locked.
+/// Signatures inside the message are not enforced here (decrypt-only path).
+struct OneKeyDecryptHelper {
+    cert: openpgp::Cert,
+    password: Option<String>,
+}
+
+impl VerificationHelper for OneKeyDecryptHelper {
+    fn get_certs(&mut self, _ids: &[openpgp::KeyHandle]) -> openpgp::Result<Vec<openpgp::Cert>> {
+        Ok(vec![self.cert.clone()])
+    }
+    fn check(&mut self, _structure: MessageStructure) -> openpgp::Result<()> {
+        // Decrypt-only: we do not require an inner signature to be present.
+        Ok(())
+    }
+}
+
+impl DecryptionHelper for OneKeyDecryptHelper {
+    fn decrypt(
+        &mut self,
+        pkesks: &[PKESK],
+        _skesks: &[SKESK],
+        sym_algo: Option<SymmetricAlgorithm>,
+        decrypt: &mut dyn FnMut(Option<SymmetricAlgorithm>, &SessionKey) -> bool,
+    ) -> openpgp::Result<Option<openpgp::Cert>> {
+        let p = StandardPolicy::new();
+        for pkesk in pkesks {
+            // Try every encryption-capable secret subkey (transport + storage).
+            let candidates = self
+                .cert
+                .keys()
+                .secret()
+                .with_policy(&p, None)
+                .supported()
+                .for_transport_encryption()
+                .chain(
+                    self.cert
+                        .keys()
+                        .secret()
+                        .with_policy(&p, None)
+                        .supported()
+                        .for_storage_encryption(),
+                );
+            for ka in candidates {
+                let mut key = ka.key().clone();
+                if key.secret().is_encrypted() {
+                    let pw = self.password.as_deref().ok_or_else(|| {
+                        anyhow::anyhow!("encryption key is protected; password required")
+                    })?;
+                    key = key.decrypt_secret(&Password::from(pw))?;
+                }
+                if let Ok(mut kp) = key.into_keypair() {
+                    if let Some((algo, sk)) = pkesk.decrypt(&mut kp, sym_algo) {
+                        if decrypt(algo, &sk) {
+                            return Ok(None);
+                        }
+                    }
+                }
+            }
+        }
+        Err(anyhow::anyhow!(
+            "decryption failed: no matching KEM/ECDH subkey for this message"
+        ))
     }
 }
 
@@ -200,27 +312,80 @@ impl Cert {
         Err(todo_err("Cert.ed25519_public_bytes"))
     }
 
-    /// Encrypt to this cert's encryption (KEM) subkey. TODO-STUB.
-    /// Shape: `serialize::stream::{Encryptor, Recipient, LiteralWriter}` over
-    /// `keys()...for_transport_encryption()` (recon §7); deferred in v1.
-    #[pyo3(signature = (_plaintext, cipher = "AES256"))]
+    /// Encrypt `plaintext` to this cert's encryption (KEM/ECDH) subkey. REAL-BOUND.
+    ///
+    /// Returns an ASCII-armored OpenPGP MESSAGE. For the `mldsa*` suites the
+    /// recipient subkey is an ML-KEM composite (FIPS 203, ML-KEM-1024+X448 /
+    /// ML-KEM-768+X25519) — post-quantum / quantum-resistant key-wrap, never
+    /// "quantum-proof". `cipher` selects the message body cipher (AES128/192/256).
+    /// Shape: `serialize::stream::{Encryptor, LiteralWriter}` over
+    /// `keys()…for_transport_encryption()` (recon §7).  ⇄ `pub.encrypt(...)`.
+    #[pyo3(signature = (plaintext, cipher = "AES256"))]
     fn encrypt<'py>(
         &self,
-        _py: Python<'py>,
-        _plaintext: &[u8],
+        py: Python<'py>,
+        plaintext: &[u8],
         cipher: &str,
     ) -> PyResult<Bound<'py, PyBytes>> {
-        let _ = cipher;
-        Err(todo_err("Cert.encrypt"))
+        let p = StandardPolicy::new();
+        let sym = map_symmetric(cipher)?;
+        let recipients: Vec<_> = self
+            .cert
+            .keys()
+            .with_policy(&p, None)
+            .supported()
+            .alive()
+            .revoked(false)
+            .for_transport_encryption()
+            .collect();
+        if recipients.is_empty() {
+            return Err(PgpError::new_err(
+                "no encryption-capable (KEM/ECDH) subkey in cert",
+            ));
+        }
+
+        let mut sink: Vec<u8> = Vec::new();
+        {
+            let message = Message::new(&mut sink);
+            let message = Armorer::new(message).build().map_err(to_py_err)?;
+            let message = Encryptor::for_recipients(message, recipients)
+                .symmetric_algo(sym)
+                .build()
+                .map_err(to_py_err)?;
+            let mut w = LiteralWriter::new(message).build().map_err(to_py_err)?;
+            w.write_all(plaintext).map_err(to_py_err)?;
+            w.finalize().map_err(to_py_err)?;
+        }
+        Ok(PyBytes::new(py, &sink))
     }
 
-    /// Verify an INLINE-signed message, returning (valid, embedded_data). TODO-STUB.
+    /// Verify an INLINE (attached-signature) message, returning
+    /// `(valid, embedded_data)`. REAL-BOUND.
+    ///
+    /// Mirrors `verify_detached`'s non-raising contract: a signature that does
+    /// not verify against this cert yields `(False, b"")` rather than raising —
+    /// and the unverified bytes are **withheld** (empty) so a caller can never
+    /// act on data that failed its signature. Both legs of a hybrid composite
+    /// must verify for `valid` to be `True`. Raises `PgpError` only when `signed`
+    /// is not a parseable OpenPGP message.  ⇄ `pub.verify(inline_msg)`.
     fn verify_inline<'py>(
         &self,
-        _py: Python<'py>,
-        _signed: &[u8],
+        py: Python<'py>,
+        signed: &[u8],
     ) -> PyResult<(bool, Bound<'py, PyBytes>)> {
-        Err(todo_err("Cert.verify_inline"))
+        let p = StandardPolicy::new();
+        let helper = OneCertHelper { cert: self.cert.clone() };
+        let mut v = VerifierBuilder::from_bytes(signed)
+            .map_err(to_py_err)?
+            .with_policy(&p, None, helper)
+            .map_err(to_py_err)?;
+        let mut out: Vec<u8> = Vec::new();
+        match v.read_to_end(&mut out) {
+            Ok(_) => Ok((true, PyBytes::new(py, &out))),
+            // Bad signature surfaces as a read error after the check() callback;
+            // withhold the (unverified) bytes.
+            Err(_) => Ok((false, PyBytes::new(py, &[]))),
+        }
     }
 }
 
@@ -362,26 +527,7 @@ impl Key {
         data: &[u8],
         password: Option<&str>,
     ) -> PyResult<Bound<'py, PyBytes>> {
-        let p = StandardPolicy::new();
-        let ka = self
-            .cert
-            .keys()
-            .secret()
-            .with_policy(&p, None)
-            .supported()
-            .alive()
-            .revoked(false)
-            .for_signing()
-            .nth(0)
-            .ok_or_else(|| PgpError::new_err("no signing-capable secret key"))?;
-
-        let mut key = ka.key().clone();
-        if key.secret().is_encrypted() {
-            let pw = password
-                .ok_or_else(|| PgpError::new_err("key is protected; password required"))?;
-            key = key.decrypt_secret(&Password::from(pw)).map_err(to_py_err)?;
-        }
-        let keypair = key.into_keypair().map_err(to_py_err)?;
+        let keypair = unlocked_signing_keypair(&self.cert, password)?;
 
         let mut sink: Vec<u8> = Vec::new();
         {
@@ -405,30 +551,60 @@ impl Key {
 
     // -- TODO-STUBBED ------------------------------------------------------
 
-    /// Inline-signed message (data + sig in one OpenPGP message). TODO-STUB.
-    /// Shape: `Message::new -> Signer::new -> LiteralWriter -> write_all`.
-    #[pyo3(signature = (_data, password = None))]
+    /// Create an armored INLINE-signed message (data + signature in one OpenPGP
+    /// message). REAL-BOUND. Counterpart of `Cert.verify_inline`; the composite
+    /// hybrid (ML-DSA + Ed448/Ed25519) signing happens transparently inside the
+    /// `KeyPair` for the PQC suites.
+    /// Shape: `Message → Armorer → Signer → LiteralWriter → write_all`.
+    /// ⇄ `key.sign(message)` (non-detached).
+    #[pyo3(signature = (data, password = None))]
     fn sign_inline<'py>(
         &self,
-        _py: Python<'py>,
-        _data: &[u8],
+        py: Python<'py>,
+        data: &[u8],
         password: Option<&str>,
     ) -> PyResult<Bound<'py, PyBytes>> {
-        let _ = password;
-        Err(todo_err("Key.sign_inline"))
+        let keypair = unlocked_signing_keypair(&self.cert, password)?;
+
+        let mut sink: Vec<u8> = Vec::new();
+        {
+            let message = Message::new(&mut sink);
+            let message = Armorer::new(message).build().map_err(to_py_err)?;
+            let signer = Signer::new(message, keypair).map_err(to_py_err)?.build().map_err(to_py_err)?;
+            let mut lw = LiteralWriter::new(signer).build().map_err(to_py_err)?;
+            lw.write_all(data).map_err(to_py_err)?;
+            lw.finalize().map_err(to_py_err)?;
+        }
+        Ok(PyBytes::new(py, &sink))
     }
 
-    /// Decrypt an OpenPGP message with this key's KEM/ECDH subkey. TODO-STUB.
+    /// Decrypt an OpenPGP message with this key's KEM/ECDH subkey. REAL-BOUND.
+    ///
+    /// For the `mldsa*` suites this is the ML-KEM (FIPS 203) composite KEM path
+    /// (ML-KEM-1024+X448 / ML-KEM-768+X25519). Raises `PgpError` when no secret
+    /// subkey matches the message's PKESK (wrong-key reject) or when a protected
+    /// secret key needs a password.
     /// Shape: `parse::stream::{DecryptorBuilder, DecryptionHelper}` (recon §7).
-    #[pyo3(signature = (_ciphertext, password = None))]
+    /// ⇄ `key.decrypt(message)`.
+    #[pyo3(signature = (ciphertext, password = None))]
     fn decrypt<'py>(
         &self,
-        _py: Python<'py>,
-        _ciphertext: &[u8],
+        py: Python<'py>,
+        ciphertext: &[u8],
         password: Option<&str>,
     ) -> PyResult<Bound<'py, PyBytes>> {
-        let _ = password;
-        Err(todo_err("Key.decrypt"))
+        let p = StandardPolicy::new();
+        let helper = OneKeyDecryptHelper {
+            cert: self.cert.clone(),
+            password: password.map(|s| s.to_string()),
+        };
+        let mut d = DecryptorBuilder::from_bytes(ciphertext)
+            .map_err(to_py_err)?
+            .with_policy(&p, None, helper)
+            .map_err(to_py_err)?;
+        let mut out: Vec<u8> = Vec::new();
+        std::io::copy(&mut d, &mut out).map_err(to_py_err)?;
+        Ok(PyBytes::new(py, &out))
     }
 
     /// Additively attach PQC subkeys (ML-DSA-87+Ed448 sign + ML-KEM-1024+X448

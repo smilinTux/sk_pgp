@@ -55,10 +55,9 @@ def test_bad_armor_raises():
 @pytest.mark.parametrize(
     "call",
     [
-        lambda k: k.sign_inline(b"x"),
-        lambda k: k.decrypt(b"x"),
+        # Still genuinely stubbed (inline sign/verify + encrypt/decrypt are now
+        # real-bound — see tests/test_inline_and_kem.py).
         lambda k: k.add_pqc_subkeys(),
-        lambda k: k.cert.encrypt(b"x"),
         lambda k: k.cert.rsa_public_numbers(),
     ],
 )

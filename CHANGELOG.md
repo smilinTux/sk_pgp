@@ -23,10 +23,24 @@ Initial buildable skeleton: PyO3 bindings to PQC `sequoia-openpgp =2.2.0-pqc.1`
 - Module: `PgpError` exception; `CIPHER_MLDSA87_ED448` / `CIPHER_MLDSA65_ED25519`
   / `CIPHER_CV25519` constants; `__version__`.
 
+### Added — real-bound (inline sign/verify + ML-KEM message crypto)
+
+- `Key.sign_inline(data, password=None)` — armored **inline** (attached-signature)
+  OpenPGP message (`Message → Armorer → Signer → LiteralWriter`); composite
+  ML-DSA+EdDSA signing transparent for the PQC suites.
+- `Cert.verify_inline(signed) -> (bool, bytes)` — verifies an inline message and
+  returns the embedded data. Non-raising on a bad signature (returns
+  `(False, b"")` and **withholds** the unverified bytes); raises `PgpError` only
+  on unparseable input. Composite AND-semantics (both legs must verify).
+- `Cert.encrypt(plaintext, cipher="AES256") -> bytes` — armored OpenPGP MESSAGE to
+  the cert's encryption subkey; for `mldsa*` suites this is the **ML-KEM (FIPS 203)**
+  composite KEM (ML-KEM-1024+X448 / ML-KEM-768+X25519). `cipher` selects the body
+  cipher (AES128/192/256).
+- `Key.decrypt(ciphertext, password=None) -> bytes` — ML-KEM/ECDH decrypt via a
+  single-TSK `DecryptionHelper`; wrong-key / locked-key reject as `PgpError`.
+
 ### Added — TODO stubs (compile, raise `PgpError`)
 
-- `Key.sign_inline` / `Cert.verify_inline`.
-- `Cert.encrypt` / `Key.decrypt` (ML-KEM message crypto).
 - `Key.add_pqc_subkeys` (additive, fingerprint-preserving).
 - `Cert.rsa_public_numbers` / `ed25519_public_bytes` (DID/JWK).
 
