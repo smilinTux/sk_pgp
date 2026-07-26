@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build a self-contained sk_pgp wheel (brew OpenSSL 3.6.2 PQC bundled under a
-# private SONAME via auditwheel — enabled by the rpath in .cargo/config.toml)
+# private SONAME via auditwheel, enabled by the rpath in .cargo/config.toml)
 # and install it into ~/.skenv. Works in mixed-OpenSSL processes.
 set -euo pipefail
 source "$HOME/.cargo/env"
@@ -9,10 +9,17 @@ cd "$HOME/clawd/skcapstone-repos/sk_pgp"
 # The PQC provider: the only OpenSSL with ML-DSA/ML-KEM (matches sq 1.4.0-pqc.1).
 export OPENSSL_DIR="${OPENSSL_DIR:-/home/linuxbrew/.linuxbrew/opt/openssl@3}"
 # auditwheel's repair pass must be able to RESOLVE brew's libcrypto.so.3 to copy
-# it into the wheel — .cargo/config.toml bakes the rpath for runtime, but the
+# it into the wheel. .cargo/config.toml bakes the rpath for runtime, but the
 # repair scan needs it on LD_LIBRARY_PATH too.
 export LD_LIBRARY_PATH="${OPENSSL_DIR}/lib:${LD_LIBRARY_PATH:-}"
 export BINDGEN_EXTRA_CLANG_ARGS="-I${OPENSSL_DIR}/include ${BINDGEN_EXTRA_CLANG_ARGS:-}"
+
+# Supply-chain / reproducibility gate: verify the libcrypto.so.3 that auditwheel
+# will bundle matches the pinned OpenSSL version + sha256 (scripts/openssl-pin.env).
+# Fails the build on any mismatch so a silent brew openssl@3 upgrade can never swap
+# the bundled crypto library without a deliberate re-pin. See KNOWN_ISSUES.md §1.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+"$SCRIPT_DIR/scripts/verify-openssl-pin.sh"
 
 # Clean prior artifacts: a stale target/maturin/ repair dir can leave the ext
 # pre-patched to the private SONAME, which then "could not be located".
