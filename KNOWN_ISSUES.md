@@ -1,6 +1,6 @@
 # Known issues
 
-## 1. OpenSSL SONAME collision — ✅ RESOLVED (2026-06-25)
+## 1. OpenSSL SONAME collision: ✅ RESOLVED (2026-06-25)
 
 **Was:** PQC is only in Sequoia's `crypto-openssl` backend (the `rust`/`nettle`/
 `botan` backends return `false` for ML-DSA/ML-KEM), so `sk_pgp` links OpenSSL
@@ -13,13 +13,34 @@ OpenSSL rpath into the extension, so `maturin build --release`'s auditwheel repa
 bundles **brew's PQC OpenSSL 3.6.2 under a PRIVATE SONAME** (`libcrypto-<hash>.so.3`,
 exporting ML-DSA-65/87 + ML-KEM-768/1024) and rewrites the extension's `DT_NEEDED`
 to that private name. No shared `libcrypto.so.3` → no collision. VERIFIED: load
-system OpenSSL first, then `sk_pgp` generate/sign/verify — works.
+system OpenSSL first, then `sk_pgp` generate/sign/verify works.
 
-**Build + install (the correct flow — NOT `maturin develop`, NOT a raw wheel):**
+**Build + install (the correct flow, NOT `maturin develop`, NOT a raw wheel):**
 ```
 maturin build --release --interpreter ~/.skenv/bin/python   # auto-repairs w/ rpath → bundles brew libcrypto privately
 ~/.skenv/bin/pip install --no-deps --force-reinstall target/wheels/sk_pgp-*.whl
 ```
+
+### Pinned bundled-OpenSSL (supply-chain / reproducibility gate)
+
+auditwheel copies whatever `$OPENSSL_DIR/lib/libcrypto.so.3` resolves to at build
+time, so a silent brew `openssl@3` upgrade would swap the bundled crypto library
+out from under us with no visible diff. The exact library is therefore PINNED:
+
+- **OpenSSL version:** `OpenSSL 3.6.2`
+- **libcrypto.so.3 sha256:** `84a5b28dfc17fbc6c28029f4feb85a696a51d5a32d46eb8d2963e3f4ff9ac250`
+  (private SONAME in the wheel: `libcrypto-84a5b28d.so.3`, where the `84a5b28d`
+  prefix is auditwheel's first-8-hex of this sha256, so the shipped wheel proves the pin)
+
+The pin lives in `scripts/openssl-pin.env`; `scripts/verify-openssl-pin.sh` recomputes
+the sha256 of the resolved `libcrypto.so.3` and **`build.sh` runs it before `maturin
+build`, failing the build on any mismatch**. `tests/test_openssl_pin.py` proves the
+gate passes for the pinned lib and fails (exit 3) for a tampered one.
+
+**Re-pinning is a deliberate step.** On an intentional OpenSSL upgrade, confirm the
+new brew `openssl@3` is the intended PQC build (ML-DSA / ML-KEM), then update
+`EXPECTED_OPENSSL_VERSION` and `EXPECTED_LIBCRYPTO_SHA256` in `scripts/openssl-pin.env`
+and commit that re-pin as its own reviewed change. Never bump it as a silent side effect.
 
 ## 2. Still-stubbed surface (raise `PgpError` by design)
 
@@ -30,12 +51,12 @@ tested** (`tests/test_inline_and_kem.py`, incl. a PQC ML-KEM-1024+X448 round-tri
 Two methods remain honest stubs (they raise `PgpError("… not implemented yet")`,
 never a fake answer):
 
-- **`Key.add_pqc_subkeys`** — additive, fingerprint-preserving subkey grafting
+- **`Key.add_pqc_subkeys`**: additive, fingerprint-preserving subkey grafting
   (the in-process equivalent of `sq key subkey add`). The sequoia `KeyBuilder` /
   subkey-binding-signature path that preserves the existing primary key was not
   pinned in recon, so it is deliberately not faked. Until then, generate a fresh
   PQC cert with `Key.generate(..., suite="mldsa87-ed448")`.
-- **`Cert.rsa_public_numbers` / `Cert.ed25519_public_bytes`** — public-MPI
+- **`Cert.rsa_public_numbers` / `Cert.ed25519_public_bytes`**: public-MPI
   extraction for DID/JWK emission (`capauth/did.py`); the exact
   `mpi::PublicKey` access path is still TBD.
 
@@ -46,8 +67,8 @@ silently start returning wrong answers before they are implemented.
 
 - `Cert.verify_inline` deliberately **withholds the message bytes** when the
   signature does not verify (returns `(False, b"")` rather than the unverified
-  plaintext) — a caller must never act on data that failed its signature.
+  plaintext); a caller must never act on data that failed its signature.
 - `Key.decrypt` is **decrypt-only**: it does not enforce an inner signature (use
   `verify_inline` / `verify_detached` for authentication).
-- Both are **additive** new methods — no existing wire format, no existing test,
+- Both are **additive** new methods: no existing wire format, no existing test,
   and not the LIVE skchat/skcomms ratchet (which is not PGPy-based) is touched.
