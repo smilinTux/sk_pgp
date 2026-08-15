@@ -4,6 +4,44 @@ All notable changes to **sk_pgp** are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versioning is
 [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Documentation
+
+- **Corrected a stale, load-bearing claim across `SOP.md`, `README.md` and
+  `SECURITY.md`.** All three declared that `Cert.encrypt`, `Key.decrypt`,
+  `sign_inline` / `verify_inline`, `add_pqc_subkeys` and the JWK exporters were "TODO
+  stubs that raise", that maturity **T2 was unmet**, and that "sk_pgp does nothing for
+  HNDL today". Those methods were real-bound in `33a4c6c` and `4f64d72`; the docs were
+  never updated. `SOP.md` also cited a test named `test_todo_stubs_raise` as the
+  evidence for the T2-unmet claim, and that test does not exist: it was replaced by
+  `test_no_skeleton_stubs_remain`, which asserts the opposite.
+- Maturity tier restated as **T2 + T3** (T1 partial, no runnable self-report) with
+  per-axis evidence, and added to `README.md`, which previously stated no tier at all.
+- Added a **combiner disclosure**: sk_pgp's KEM is the OpenPGP composite KEM, not the
+  sk-standards `HKDF(X25519 || ML-KEM-768)` combiner used by the `sk-pqc` family. The
+  two are hybrid but not wire-compatible. The old text claimed the future KEM would
+  use the sk-standards combiner.
+- Scoped the encryption claim to the **recipient certificate**: encrypting to a
+  classical cert is classical ECDH and buys nothing against HNDL.
+- `SECURITY.md`: added the **experimental / unaudited posture statement** (required by
+  SECURITY_DISCLOSURE_STANDARD section 2, and already present in `README.md`), GitHub
+  private vulnerability reporting as the primary channel, a **72 hour acknowledgement
+  SLA**, a supported-versions table, and a safe-harbour clause.
+- Cited `CRYPTOGRAPHY_STANDARD` by its canonical, reachable sk-standards URL in both
+  `SOP.md` and `SECURITY.md`; previously it was named without any link.
+- `SOP.md`: added a `docs-evidence` block (9 hermetic checks) pinning the sequoia PQC
+  pin, the `crypto-openssl` backend selection, the `_sk_pgp` cdylib name, the
+  `abi3-py39` wheel, the suite-constant string values, the stub-free invariant, and
+  the T2 evidence tests. Added an "Unverified / needs an operator pass" section.
+- Added `.github/workflows/docs-check.yml` (tiers 1,2).
+- Fixed a dangling code fence at the end of `SOP.md`.
+
+### Known issues
+
+- `build.log`, a build artifact, is committed to the default branch. Left in place by
+  this docs-only change; removing it plus a `.gitignore` entry is a follow-up.
+
 ## [0.1.0] — Unreleased
 
 Initial buildable skeleton: PyO3 bindings to PQC `sequoia-openpgp =2.2.0-pqc.1`

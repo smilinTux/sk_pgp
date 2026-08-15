@@ -90,25 +90,50 @@ It replaces the `sq`-subprocess `SequoiaBackend` in `capauth` with in-process
 calls, and is the migration target for the PGPy call-sites in
 `skcomms` / `skchat` / `capauth` (see [`DESIGN.md`](DESIGN.md)).
 
-### Status (0.1.0 — skeleton)
+### Status (0.1.0, pre-1.0)
+
+**The whole public surface is real-bound.** Earlier revisions of this README listed
+the inline, KEM, additive-subkey and JWK-export methods as "TODO stub"; that has not
+been true since commits `33a4c6c` and `4f64d72`.
 
 | Operation | State |
 |---|---|
-| `Cert.from_bytes` / `from_armor` / `from_file` | ✅ real-bound |
-| `Cert.fingerprint` / `is_post_quantum` / `has_secret_key` | ✅ real-bound |
-| `Cert.to_armor` / `to_bytes` | ✅ real-bound |
-| `Cert.verify_detached` | ✅ real-bound |
-| `Key.from_bytes` / `from_file` | ✅ real-bound |
-| `Key.generate` (PQC + classical, v6/v4) | ✅ real-bound |
-| `Key.cert` / `fingerprint` / `is_protected` / `to_armor` | ✅ real-bound |
-| `Key.sign_detached` (incl. protected keys) | ✅ real-bound |
-| `Key.sign_inline` / `Cert.verify_inline` | ⏳ TODO stub |
-| `Cert.encrypt` / `Key.decrypt` (ML-KEM) | ⏳ TODO stub |
-| `Key.add_pqc_subkeys` (additive) | ⏳ TODO stub |
-| `Cert.rsa_public_numbers` / `ed25519_public_bytes` (DID/JWK) | ⏳ TODO stub |
+| `Cert.from_bytes` / `from_armor` / `from_file` | real-bound |
+| `Cert.fingerprint` / `is_post_quantum` / `has_secret_key` | real-bound |
+| `Cert.to_armor` / `to_bytes` | real-bound |
+| `Cert.verify_detached` | real-bound |
+| `Key.from_bytes` / `from_file` | real-bound |
+| `Key.generate` (PQC + classical, v6/v4) | real-bound |
+| `Key.cert` / `fingerprint` / `is_protected` / `to_armor` | real-bound |
+| `Key.sign_detached` (incl. protected keys) | real-bound |
+| `Key.sign_inline` / `Cert.verify_inline` | real-bound |
+| `Cert.encrypt` / `Key.decrypt` (OpenPGP composite KEM) | real-bound |
+| `Key.add_pqc_subkeys` (additive, v6 primary required) | real-bound |
+| `Cert.rsa_public_numbers` / `ed25519_public_bytes` (DID/JWK) | real-bound |
 
-TODO stubs raise a catchable `sk_pgp.PgpError`; they compile and have the right
-shape but are not yet implemented.
+No method returns a "not implemented" placeholder. A method may still raise
+`sk_pgp.PgpError` for a **real** reason (RSA numbers on an Ed25519 key, a cert with no
+encryption subkey, a locked secret key with no passphrase, a v4 primary passed to
+`add_pqc_subkeys`). `tests/test_smoke.py::test_no_skeleton_stubs_remain` asserts the
+stub marker is gone, and `SOP.md`'s `docs-evidence` block pins it on every push.
+
+### Maturity tier: **T2 + T3**
+
+Per the [sk-standards `CRYPTOGRAPHY_STANDARD.md`](https://github.com/smilinTux/sk-standards/blob/main/standards/CRYPTOGRAPHY_STANDARD.md)
+T0-T4 scale:
+
+| Tier | State |
+|---|---|
+| **T0** Classical | covered (`cv25519`, `rsa*`; AES-256/SHA-2 via sequoia) |
+| **T1** Agile | **partial.** Named suite ids and a config-driven `generate(suite=…)`, but **no runnable self-report**; evidence is per-object introspection (`is_post_quantum`). |
+| **T2** Hybrid KEM | **met, scoped to OpenPGP messages encrypted to a PQC certificate.** Uses the **OpenPGP composite KEM**, not the sk-standards `HKDF(X25519 \|\| ML-KEM-768)` combiner. The two are **not wire-compatible**. |
+| **T3** Hybrid sig | **met.** ML-DSA-87 + Ed448 (L5), ML-DSA-65 + Ed25519 (L3), valid only if **both** legs verify. |
+| **T4** Transport closed | **N/A**, this is a library with no transport leg. |
+
+Scope it honestly: encrypting to a **classical** (`cv25519`, `rsa*`) certificate is
+classical ECDH and buys nothing against Harvest-Now-Decrypt-Later. The T2 claim covers
+messages encrypted to a **PQC** certificate. Full per-axis evidence is in
+[`SOP.md`](SOP.md) section 9.
 
 ---
 
@@ -147,6 +172,10 @@ Apache-2.0. See [LICENSE](LICENSE).
 - ⬇️ **Used by:** [capauth](https://github.com/smilinTux/capauth) — issues the post-quantum signing root through `sk_pgp`; [skcomms](https://github.com/smilinTux/skcomms) / [skchat](https://github.com/smilinTux/skchat) — the signing layers migrating off PGPy onto `sk_pgp`.
 - 📐 **Standards:** [sk-standards](https://github.com/smilinTux/sk-standards) — crypto · data-flow · version · doc/SOP.
 
-Where `sk-pqc` does **key encapsulation** (confidentiality), `sk_pgp` does **OpenPGP
-identity + signatures** (and, later, ML-KEM message encryption). Together they cover the
-SK ecosystem's post-quantum surface.
+Where `sk-pqc` does **raw key encapsulation** with the sk-standards
+`HKDF(X25519 || ML-KEM-768)` combiner, `sk_pgp` does **OpenPGP identity, signatures,
+and OpenPGP message encryption** using the **OpenPGP composite KEM**. Both are hybrid,
+but they are **different constructions and are not wire-compatible**: pick `sk-pqc`
+when you need the sk-standards combiner on the wire, and `sk_pgp` when you need an
+OpenPGP certificate or message. Together they cover the SK ecosystem's post-quantum
+surface.

@@ -9,24 +9,71 @@ the secret-handling rules, the dependency posture, and how to report a vulnerabi
 > here is **scoped to the signing surface** and cites the FIPS number + hybrid-vs-classical.
 > sk_pgp **binds** vetted libraries and **hand-rolls no cryptography**.
 
+> ⚠️ **Experimental, pre-1.0, NOT independently security-audited.** No third-party
+> security audit, fuzzing, or formal review has been performed on sk_pgp. The
+> primitives come from vetted upstreams (sequoia-openpgp, OpenSSL 3.6, liboqs); the
+> original code is the PyO3 binding surface and the Python ergonomics layer. A passing
+> test suite proves interop and behavior, **not** the absence of side-channels,
+> memory-safety defects at the FFI boundary, or protocol flaws. **Review it yourself
+> before production use, and do not trust it beyond the evidence.**
+
+---
+
+## Supported versions
+
+| Version | Supported |
+|---|---|
+| 0.1.x | current |
+| < 0.1.0 | not supported (pre-release) |
+
+Until 1.0, only the latest published `0.x` line receives security fixes. sk_pgp is not
+yet published to PyPI, so "published" currently means the newest tag on `main`.
+
 ---
 
 ## Reporting a vulnerability
 
-- **Do not** open a public issue for a security defect.
-- Report privately to the maintainers (smilinTux / Chef) via the project's private
-  security channel; if you only have a public path, open a minimal issue titled
-  "security — please contact" with **no** technical detail and request a private
-  channel.
-- Include: affected version (`sk_pgp.__version__`), OS/arch, OpenSSL + liboqs
-  versions, a minimal reproducer, and the impact you believe it has.
-- Expect acknowledgement, a severity assessment, and a remediation plan. Fixes ship
-  as a patch release with a dated `CHANGELOG.md` entry; we credit reporters who want
-  credit.
+**Do not open a public GitHub issue for a security vulnerability.**
 
-**Coordinated disclosure:** because the real cryptographic assurance lives in
-**sequoia-openpgp / OpenSSL / liboqs**, a primitive-level finding should also be
-reported upstream. sk_pgp will pin/patch and advise consumers.
+**Primary channel:** GitHub **private vulnerability reporting**. Use "Report a
+vulnerability" on the Security tab of
+[`smilinTux/sk_pgp`](https://github.com/smilinTux/sk_pgp/security/advisories/new).
+This creates a private advisory only the maintainers can see.
+
+**Fallback:** if private reporting is unavailable to you, open a minimal public issue
+titled "security, please contact" with **no** technical detail, and request a private
+channel.
+
+Please include: affected version (`sk_pgp.__version__`), OS and architecture, OpenSSL
+and liboqs versions, a minimal reproducer, and the impact you believe it has.
+
+**Acknowledgement SLA: within 72 hours.** After acknowledgement you can expect a
+severity assessment, a remediation plan, and a target fix or mitigation within 90
+days, with the disclosure date coordinated with you. Fixes ship as a patch release
+with a dated `CHANGELOG.md` entry. Reporters are credited unless they ask otherwise.
+
+**Coordinated disclosure:** the real cryptographic assurance lives in
+**sequoia-openpgp / OpenSSL / liboqs**, so a primitive-level finding should also be
+reported upstream. sk_pgp will pin or patch and advise consumers.
+
+### Safe harbour
+
+We will not pursue or support legal action against anyone who, in good faith, finds
+and reports a vulnerability under this policy: research only against your **own**
+keys, data and installations; no access to or exfiltration of other people's data; no
+denial of service, spam, or social engineering of maintainers or users; and no public
+disclosure before a coordinated date. Good-faith research conducted this way is
+authorised, and we will work with you rather than against you. If you are unsure
+whether an action is in scope, ask first via the private channel.
+
+### What we especially want to hear about
+
+- A composite signature reported valid when only **one** leg verifies.
+- `verify_detached` or `verify_inline` returning data or `True` for input that did not
+  verify, or `verify_inline` leaking unverified bytes instead of `(False, b"")`.
+- A path where malformed input crashes the extension instead of raising `PgpError`.
+- Passphrase or secret-key material reaching a log, an exception message, or a core dump.
+- Any place a claim in these docs overstates assurance, including the tier statement.
 
 ---
 
@@ -35,14 +82,24 @@ reported upstream. sk_pgp will pin/patch and advise consumers.
 | Surface | State | Honest claim |
 |---|---|---|
 | **Signatures** (detached) | Hybrid composite **ML-DSA-87 + Ed448** (L5) / **ML-DSA-65 + Ed25519** (L3); valid **iff BOTH legs** verify | **Post-quantum / quantum-resistant signing** (FIPS 204 + RFC 8032), additive classical leg retained |
-| **KEM / message encryption** | **TODO** — `Cert.encrypt` / `Key.decrypt` are stubs that raise `PgpError` | **No claim.** sk_pgp does **nothing for HNDL** today |
+| **KEM / message encryption** | Real-bound. `Cert.encrypt` / `Key.decrypt` do OpenPGP message encryption. To a **PQC** cert the recipient subkey is the **ML-KEM-1024 + X448** (or ML-KEM-768 + X25519) composite; to a **classical** cert it is plain ECDH. | **Post-quantum message encryption, only when the recipient certificate is PQC** (FIPS 203). Confidential if **either** leg holds. **No** HNDL claim for messages encrypted to a classical cert. |
 | **Transport / TLS** | N/A — sk_pgp is a library, no channel | No "end-to-end" claim originates here |
 | **Symmetric / hashing** | AES-256-GCM, SHA-256/384 via sequoia | Quantum-acceptable (Grover-only); **AES-256 is not "quantum-broken"** |
 
-**Therefore:** describe sk_pgp as a **post-quantum signing engine**. Do **not** call
-this repo "PQC encryption," "HNDL-resistant," or "end-to-end quantum-resistant" —
-only signatures are migrated, and signatures are not retroactively breakable, which
-is precisely why HNDL is addressed by KEM (a separate, still-TODO surface).
+**Therefore:** describe sk_pgp as a **post-quantum OpenPGP engine** that both signs
+and encrypts. Two limits keep that claim honest:
+
+1. **The encryption claim is conditional on the recipient certificate.** A message
+   encrypted to a `cv25519` or `rsa*` cert is protected by **classical** ECDH/RSA and
+   is fully exposed to Harvest-Now-Decrypt-Later. Only a PQC cert (one carrying an
+   ML-KEM composite subkey, which `is_post_quantum` reports) earns the post-quantum
+   confidentiality claim.
+2. **sk_pgp is not an end-to-end system.** It has no transport, no session, no key
+   distribution and no trust decisions. Do not call this repo "end-to-end
+   quantum-resistant"; that property belongs to a protocol, not to a library.
+
+Do **not** use the forbidden words ("quantum-proof", "quantum-safe", "unbreakable",
+"CNSA 2.0 compliant") about anything in this repo.
 
 ---
 
@@ -74,9 +131,14 @@ is precisely why HNDL is addressed by KEM (a separate, still-TODO surface).
    The build-time mixed-OpenSSL import test is the gate (SOP §3.2).
 
 ### Out of scope (handled elsewhere / not yet built)
-- **HNDL / confidentiality.** sk_pgp signs; it does not yet wrap or encrypt. The
-  hybrid `HKDF-SHA256(X25519_ss ‖ MLKEM768_ss)` KEM is **TODO**; until then HNDL is
-  not addressed by this repo.
+- **Confidentiality for anything encrypted to a classical certificate.** sk_pgp does
+  encrypt (see the scope table above), but only a **PQC** recipient certificate gets
+  the post-quantum property. Messages encrypted to `cv25519` or `rsa*` certs remain
+  exposed to Harvest-Now-Decrypt-Later, and that is the caller's choice of recipient
+  key, not something this library can fix.
+- **The sk-standards `HKDF-SHA256(X25519_ss || MLKEM768_ss)` combiner.** Not
+  implemented here and not planned here; that construction lives in the `sk-pqc`
+  family. sk_pgp uses the OpenPGP composite KEM instead.
 - **Key storage / rotation / transport.** Owned by `capauth` / `skcomms` / the
   CapAuth bunker, not by this library.
 - **Supply-chain of the bound crypto.** The cryptographic assurance is sequoia +
@@ -118,24 +180,36 @@ is precisely why HNDL is addressed by KEM (a separate, still-TODO surface).
 
 ---
 
-## CRYPTOGRAPHY_STANDARD.md compliance statement
+## CRYPTOGRAPHY_STANDARD compliance statement
+
+Standard: [sk-standards `standards/CRYPTOGRAPHY_STANDARD.md`](https://github.com/smilinTux/sk-standards/blob/main/standards/CRYPTOGRAPHY_STANDARD.md).
 
 sk_pgp conforms to the SK **CRYPTOGRAPHY_STANDARD** honest-claim and binding rules:
 
-- Uses **"post-quantum" / "quantum-resistant,"** never the forbidden words
-  ("quantum-proof," "quantum-safe," "unbreakable," "CNSA 2.0 compliant," "FIPS 206/
-  Falcon"); never implies AES-256 is quantum-broken.
-- **Every claim is scoped to the signing surface** and cites FIPS 204 (ML-DSA) /
-  FIPS 203 (ML-KEM, future) / RFC 8032 (EdDSA) / RFC 9580 (v6) /
-  draft-ietf-openpgp-pqc-17 (composite) + NIST CSWP 39 (agility).
-- **Binds** vetted libraries (sequoia → crypto-openssl/OpenSSL 3.6.2 → liboqs 0.14);
+- Uses **"post-quantum" / "quantum-resistant"**, never the forbidden marketing words;
+  never implies AES-256 is quantum-broken (it is symmetric, and Grover only halves the
+  effective strength).
+- **Every claim is scoped to a named surface** (signing, or OpenPGP message
+  encryption) and cites FIPS 204 (ML-DSA) / FIPS 203 (ML-KEM) / RFC 8032 (EdDSA) /
+  RFC 9580 (v6) / draft-ietf-openpgp-pqc-17 (composite) + NIST CSWP 39 (agility).
+- **Binds** vetted libraries (sequoia → crypto-openssl / OpenSSL 3.6.2 → liboqs 0.14);
   **hand-rolls no crypto.**
 - Composite signatures are **hybrid (lattice AND classical)** with the classical leg
-  **additive/reversible**; the **future** KEM uses the standard combiner
-  `HKDF-SHA256(X25519_ss ‖ MLKEM768_ss)` — **never XOR, never pure-PQ**.
-- **Maturity tier declared honestly: T3-capable (signing); T2 (hybrid KEM) is TODO**
-  — see [SOP.md §9](SOP.md). HNDL is **not** claimed.
-- **Self-report evidence:** per-object `is_post_quantum` + fingerprint version-length
-  + the passing PQC keygen test back every "this is post-quantum" statement.
+  **additive and reversible**, never XOR, never pure-PQ.
+- **Combiner disclosure:** the KEM path is the **OpenPGP composite KEM**, **not** the
+  sk-standards `HKDF-SHA256(X25519_ss || MLKEM768_ss)` combiner used by the `sk-pqc`
+  family. Both are hybrid; they are **different constructions and not wire-compatible**.
+  sk_pgp does not implement that combiner and does not claim to.
+- **Maturity tier declared honestly: T2 + T3**, with T1 **partial** (no runnable
+  self-report). See [SOP.md section 9](SOP.md) for per-axis evidence.
+- **Self-report evidence:** sk_pgp has **no self-report command**. Per-object
+  `is_post_quantum`, the fingerprint version-length, and the passing PQC tests back
+  every "this is post-quantum" statement.
+
+> **Correction, 2026-08-15.** This section previously declared "T3-capable (signing);
+> T2 (hybrid KEM) is TODO" and described the KEM as future work using the sk-standards
+> combiner. Both statements were stale and are corrected above: the KEM surface has
+> been real-bound since commit `33a4c6c`, and it uses the OpenPGP composite
+> construction rather than the sk-standards combiner.
 
 License: **Apache-2.0** ([LICENSE](LICENSE)).
